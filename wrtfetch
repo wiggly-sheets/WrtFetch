@@ -1,0 +1,494 @@
+#!/bin/ash
+
+GREEN="$(printf '\033[1;32m')"
+CYAN="$(printf '\033[1;36m')"
+WHITE="$(printf '\033[1;37m')"
+YELLOW="$(printf '\033[1;33m')"
+RESET="$(printf '\033[0m')"
+
+# WrtFetch version
+VERSION="0.1.0"
+
+HOST_OVERRIDE=""
+
+# Automatic hardware detection
+HOST=$(cat /tmp/sysinfo/model 2>/dev/null)
+
+if [ -z "$HOST" ]; then
+    HOST=$(ubus call system board 2>/dev/null |
+        jsonfilter -e '@.model' 2>/dev/null)
+fi
+
+if [ -z "$HOST" ]; then
+    HOST=$(cat /tmp/sysinfo/board_name 2>/dev/null)
+fi
+
+[ -n "$HOST" ] || HOST="OpenWrt Device"
+
+# Manual override takes precedence
+[ -n "$HOST_OVERRIDE" ] && HOST="$HOST_OVERRIDE"
+
+# ==================================================
+# SYSTEM INFORMATION
+# ==================================================
+
+OS=$(sed -n "s/^DISTRIB_DESCRIPTION='\(.*\)'/\1/p" /etc/openwrt_release)
+
+KERNEL=$(uname -r)
+
+ARCH=$(uname -m)
+
+CPU_ARCH=$(ubus call system board 2>/dev/null |
+    jsonfilter -e '@.system' 2>/dev/null |
+    awk '{print $1}')
+
+[ -n "$CPU_ARCH" ] || CPU_ARCH="Unknown"
+
+ARCH_DISPLAY="$CPU_ARCH ($ARCH)"
+
+BUSYBOX_VERSION=$(ash --help 2>&1 |
+    sed -n '1s/BusyBox v\([^ ]*\).*/\1/p')
+
+SHELL_INFO=$(tr '\0' ' ' < /proc/$$/cmdline 2>/dev/null | awk '{print $1}')
+
+SHELL_INFO=${SHELL_INFO##*/}
+
+SHELL_INFO=${SHELL_INFO#-}
+
+[ -n "$SHELL_INFO" ] || SHELL_INFO="Unknown"
+
+# Detect SoC
+SOC=$(tr '\0' '\n' < /proc/device-tree/compatible 2>/dev/null |
+    awk -F, '
+        NF >= 2 {
+            vendor=$1
+            model=$2
+        }
+        END {
+            if (vendor != "" && model != "")
+                print vendor " " model
+        }
+    ')
+
+[ -n "$SOC" ] || SOC="Unknown"
+
+[ -n "$SOC" ] || SOC="Unknown"
+
+# Detect CPU core architecture
+CPU_CORE=$(tr '\0' '\n' < /proc/device-tree/cpus/cpu@0/compatible 2>/dev/null |
+    awk -F, '$2 ~ /^cortex-/ {
+        print $2
+        exit
+    }')
+
+[ -n "$CPU_CORE" ] || CPU_CORE="Unknown"
+
+# Detect CPU core count
+CPU_CORES=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)
+
+[ "$CPU_CORES" -gt 0 ] 2>/dev/null || CPU_CORES="Unknown"
+
+# Build CPU description
+
+# Format SoC vendor and model
+SOC=$(printf '%s\n' "$SOC" | awk '
+{
+    vendor=$1
+    model=$2
+
+    vendor=toupper(substr(vendor,1,1)) substr(vendor,2)
+    model=toupper(model)
+
+    print vendor " " model
+}')
+
+# Format CPU core name
+CPU_CORE=$(printf '%s\n' "$CPU_CORE" | sed 's/^cortex-/Cortex-/; s/-a/-A/; s/-r/-R/; s/-m/-M/')
+
+# Build CPU description
+CPU="$SOC ($CPU_CORES x $CPU_CORE)"
+
+# ==================================================
+# MEMORY
+# ==================================================
+
+MEM_TOTAL=$(awk '/MemTotal:/ {printf "%d", $2/1024}' /proc/meminfo)
+MEM_AVAILABLE=$(awk '/MemAvailable:/ {printf "%d", $2/1024}' /proc/meminfo)
+
+MEM_USED=$((MEM_TOTAL - MEM_AVAILABLE))
+MEM_PERCENT=$((MEM_USED * 100 / MEM_TOTAL))
+
+MEM_BAR=$(awk -v p="$MEM_PERCENT" 'BEGIN {
+    n=int(p/5)
+    for (i=0; i<20; i++)
+        printf "%s", (i<n ? "#" : "-")
+}')
+
+# ==================================================
+# STORAGE
+# ==================================================
+NFO=$(tr '\0' ' ' < /proc/$$/cmdline 2>/dev/null | awk '{print $1}')
+SHELL_INFO=${SHELL_INFO##*/}
+SHELL_INFO=${SHELL_INFO#-}
+
+[ -n "$SHELL_INFO" ] || SHELL_INFO="Unknown"
+DISK=$(df -h / | awk 'NR==2 {
+    print $3 " / " $2 " (" $5 ")"
+}')
+
+STORAGE_PERCENT=$(df -P / | awk 'NR==2 {
+    gsub(/%/, "", $5)
+    print $5
+}')
+
+STORAGE_BAR=$(awk -v p="$STORAGE_PERCENT" 'BEGIN {
+    n=int(p/5)
+    for (i=0; i<20; i++)
+        printf "%s", (i<n ? "#" : "-")
+}')
+
+
+# ==================================================
+# UPTIME & TEMPERATURE
+# ==================================================
+
+UPTIME=$(awk '{
+    t=int($1)
+    d=int(t/86400)
+    h=int((t%86400)/3600)
+    m=int((t%3600)/60)
+
+    if (d > 0) printf "%dd %dh %dm",d,h,m
+    else if (h > 0) printf "%dh %dm",h,m
+    else printf "%dm",m
+}' /proc/uptime)
+
+TEMP=$(awk 'BEGIN {max=-999} {
+    if ($1 > max) max=$1
+} END {
+    if (max >= 0) printf "%.1f",max
+    else print "N/A"
+}' /sys/class/thermal/thermal_zone*/temp 2>/dev/null)
+
+# Temperature color thresholds
+TEMP_COLOR="$CYAN"
+
+if [ "$TEMP" != "N/A" ]; then
+    TEMP_INT=${TEMP%.*}
+
+    if [ "$TEMP_INT" -ge 75 ]; then
+        TEMP_COLOR="$(printf '\033[1;31m')"
+    elif [ "$TEMP_INT" -ge 60 ]; then
+        TEMP_COLOR="$(printf '\033[1;33m')"
+    else
+        TEMP_COLOR="$(printf '\033[1;34m')"
+    fi
+
+    TEMP="${TEMP}°C"
+fi
+
+# ==================================================
+# NETWORK
+# ==================================================
+
+LAN=$(ip -4 addr show br-lan 2>/dev/null |
+    awk '/inet / {
+        sub(/\/.*/, "", $2)
+        print $2
+        exit
+    }')
+
+LAN6=$(ip -6 addr show dev br-lan scope global 2>/dev/null |
+    awk '/inet6 / {
+        sub(/\/.*/, "", $2)
+        print $2
+        exit
+    }')
+
+WAN6=$(ip -6 route get 2606:4700:4700::1111 2>/dev/null |
+    awk '{
+        for (i=1; i<=NF; i++)
+            if ($i == "src") {
+                print $(i+1)
+                exit
+            }
+    }')
+
+WAN_IF=$(ip -4 route show default 2>/dev/null |
+    awk '$1 == "default" {
+        for (i=1; i<=NF; i++)
+            if ($i == "dev") {
+                print $(i+1)
+                exit
+            }
+    }')
+
+WAN=$(ip -4 route get 1.1.1.1 2>/dev/null |
+    awk '{
+        for (i=1; i<=NF; i++)
+            if ($i == "src") {
+                print $(i+1)
+                exit
+            }
+    }')
+
+GATEWAY=$(ip -4 route show default 2>/dev/null |
+    awk 'NR==1 {
+        for (i=1; i<=NF; i++)
+            if ($i == "via") {
+                print $(i+1)
+                exit
+            }
+    }')
+
+# ==================================================
+# WI-FI
+# ==================================================
+
+wifi_band() {
+    iw dev | awk -v band="$1" '
+        /^[[:space:]]*Interface / {
+            iface=$2
+            ssid=""
+        }
+
+        /^[[:space:]]*ssid / {
+            ssid=substr($0, index($0, "ssid ") + 5)
+        }
+
+        /^[[:space:]]*channel / {
+            ch=$2
+            current_band=(ch <= 14 ? "2.4" : "5")
+            width="?"
+            unit=""
+
+            for (i=1; i<=NF; i++) {
+                if ($i == "width:") {
+                    width=$(i+1)
+                    unit=$(i+2)
+
+                    # Remove trailing punctuation
+                    sub(/[,;]+$/, "", width)
+                    sub(/[,;]+$/, "", unit)
+                }
+            }
+
+            if (current_band == band) {
+                if (found++) printf "; "
+
+                printf "%s | Ch %s | %s %s",
+                    (ssid != "" ? ssid : iface),
+                    ch, width, unit
+            }
+        }
+    '
+}
+
+wifi_clients() {
+    total24=0
+    total5=0
+
+    for iface in $(iw dev 2>/dev/null |
+        awk '$1 == "Interface" {print $2}'); do
+
+        channel=$(iw dev "$iface" info 2>/dev/null |
+            awk '$1 == "channel" {print $2; exit}')
+
+        count=$(iw dev "$iface" station dump 2>/dev/null |
+            awk '$1 == "Station" {n++} END {print n+0}')
+
+        case "$channel" in
+            [1-9]|1[0-4])
+                total24=$((total24 + count))
+                ;;
+            '')
+                ;;
+            *)
+                total5=$((total5 + count))
+                ;;
+        esac
+    done
+
+    printf "%d on 2.4G / %d on 5G" "$total24" "$total5"
+}
+
+WIFI_24=$(wifi_band "2.4")
+WIFI_5=$(wifi_band "5")
+WIFI_CLIENTS=$(wifi_clients)
+
+# ==================================================
+# CPU LOAD
+# ==================================================
+
+LOAD=$(awk '{
+    printf "%.2f / %.2f / %.2f", $1, $2, $3
+}' /proc/loadavg)
+
+# ==================================================
+# WAN TRAFFIC
+# ==================================================
+
+WAN_TRAFFIC="N/A"
+
+if [ -n "$WAN_IF" ] &&
+   [ -d "/sys/class/net/$WAN_IF/statistics" ]; then
+
+    RX1=$(cat "/sys/class/net/$WAN_IF/statistics/rx_bytes")
+    TX1=$(cat "/sys/class/net/$WAN_IF/statistics/tx_bytes")
+
+    sleep 1
+
+    RX2=$(cat "/sys/class/net/$WAN_IF/statistics/rx_bytes")
+    TX2=$(cat "/sys/class/net/$WAN_IF/statistics/tx_bytes")
+
+    WAN_TRAFFIC=$(awk \
+        -v rx1="$RX1" -v rx2="$RX2" \
+        -v tx1="$TX1" -v tx2="$TX2" \
+        'BEGIN {
+            down=(rx2-rx1)*8/1000000
+            up=(tx2-tx1)*8/1000000
+
+            if (down < 0) down=0
+            if (up < 0) up=0
+
+            printf "↓ %.1f Mbps / ↑ %.1f Mbps", down, up
+        }')
+fi
+
+# ==================================================
+# FALLBACKS
+# ==================================================
+
+[ -n "$OS" ] || OS="OpenWrt"
+[ -n "$LAN" ] || LAN="N/A"
+[ -n "$LAN6" ] || LAN6="N/A"
+[ -n "$WAN6" ] || WAN6="N/A"
+[ -n "$WAN" ] || WAN="N/A"
+[ -n "$GATEWAY" ] || GATEWAY="N/A"
+[ -n "$DISK" ] || DISK="N/A"
+[ -n "$TEMP" ] || TEMP="N/A"
+[ -n "$WIFI_24" ] || WIFI_24="N/A"
+[ -n "$WIFI_5" ] || WIFI_5="N/A"
+[ -n "$WIFI_CLIENTS" ] || WIFI_CLIENTS="N/A"
+[ -n "$LOAD" ] || LOAD="N/A"
+
+# ==================================================
+# DISPLAY
+# ==================================================
+
+print_info() {
+    case "$1" in
+
+	# VERSION
+        0)
+            printf "%sWrtFetch %s%s\n" "$CYAN" "$VERSION" "$RESET"
+            ;;
+
+        # HOST
+        1)
+            printf "%s%s%s\n" "$GREEN" "$HOST" "$RESET"
+            ;;
+
+        # SECTION DIVIDERS
+        2|10|14|20|30)
+            printf "%s------------------------------%s\n" "$CYAN" "$RESET"
+            ;;
+
+        # SECTION HEADERS
+        3)
+            printf "%sSYSTEM%s\n" "$GREEN" "$RESET"
+            ;;
+
+        11)
+            printf "%sHARDWARE%s\n" "$GREEN" "$RESET"
+            ;;
+
+        15)
+            printf "%sRESOURCES%s\n" "$GREEN" "$RESET"
+            ;;
+
+        21)
+            printf "%sNETWORK%s\n" "$GREEN" "$RESET"
+            ;;
+
+        31)
+            printf "%sPERFORMANCE%s\n" "$GREEN" "$RESET"
+            ;;
+
+        # SYSTEM
+        4)  printf "%sOS          %s%s%s\n" "$CYAN" "$WHITE" "$OS" "$RESET" ;;
+        5)  printf "%sKernel      %s%s%s\n" "$CYAN" "$WHITE" "$KERNEL" "$RESET" ;;
+        6)  printf "%sArch        %s%s%s\n" "$CYAN" "$WHITE" "$ARCH_DISPLAY" "$RESET" ;; 
+	7)  printf "%sShell       %s%s%s\n" "$CYAN" "$WHITE" "$SHELL_INFO" "$RESET" ;;
+	8)  printf "%sBusyBox     %s%s%s\n" "$CYAN" "$WHITE" "$BUSYBOX_VERSION" "$RESET" ;;
+        9)  printf "%sUptime      %s%s%s\n" "$CYAN" "$WHITE" "$UPTIME" "$RESET" ;; 
+	
+	# HARDWARE
+        12) printf "%sCPU         %s%s%s\n" "$CYAN" "$WHITE" "$CPU" "$RESET" ;;
+	13) printf "%sTemp        %s%s%s\n" "$CYAN" "$TEMP_COLOR" "$TEMP" "$RESET" ;;
+       
+        # RESOURCES
+        16) printf "%sMemory      %s%s / %s MiB (%s%%)%s\n" "$CYAN" "$WHITE" "$MEM_USED" "$MEM_TOTAL" "$MEM_PERCENT" "$RESET" ;;
+        17) printf "%s            [%s]%s\n" "$GREEN" "$MEM_BAR" "$RESET" ;;
+        18) printf "%sStorage     %s%s%s\n" "$CYAN" "$WHITE" "$DISK" "$RESET" ;;
+        19) printf "%s            [%s]%s\n" "$GREEN" "$STORAGE_BAR" "$RESET" ;;
+
+        # NETWORK
+  	22) printf "%sGateway     %s%s%s\n" "$CYAN" "$WHITE" "$GATEWAY" "$RESET" ;;
+        23) printf "%sLAN IPv4    %s%s%s\n" "$CYAN" "$WHITE" "$LAN" "$RESET" ;;
+        24) printf "%sWAN IPv4    %s%s%s\n" "$CYAN" "$WHITE" "$WAN" "$RESET" ;;
+	25) printf "%sLAN IPv6    %s%s%s\n" "$CYAN" "$WHITE" "$LAN6" "$RESET" ;;
+	26) printf "%sWAN IPv6    %s%s%s\n" "$CYAN" "$WHITE" "$WAN6" "$RESET" ;;
+	27) printf "%sWi-Fi 2.4G  %s%s%s\n" "$CYAN" "$WHITE" "$WIFI_24" "$RESET" ;;
+	28) printf "%sWi-Fi 5G    %s%s%s\n" "$CYAN" "$WHITE" "$WIFI_5" "$RESET" ;;
+	29) printf "%sWi-Fi Clients %s%s%s\n" "$CYAN" "$WHITE" "$WIFI_CLIENTS" "$RESET" ;;
+
+        # PERFORMANCE
+        32) printf "%sCPU Load    %s%s (1m / 5m / 15m)%s\n" "$CYAN" "$WHITE" "$LOAD" "$RESET" ;; 
+	33) printf "%sWAN Traffic %s%s%s\n" "$CYAN" "$WHITE" "$WAN_TRAFFIC" "$RESET" ;;
+
+        *) printf '\n' ;;
+    esac
+}
+
+printf '\n'
+
+i=0
+
+INFO_ROWS=34
+
+while IFS= read -r line || [ -n "$line" ]; do
+    printf "%s%-31s%s  " "$CYAN" "$line" "$RESET"
+
+    print_info "$i"
+
+    i=$((i + 1))
+done <<'LOGO'
+  ;::;;iiiiiiiiiiiiiiii;:.
+  ,;iiiiiiiiiiiiiiiiiiiii;,
+:iiiiiii:,.       .,:iiiiiii:
+:iii;, .:;iiiiiiiii;:. ,;iii:
+ .,..:iiiiiiiiiiiiiiiii:..,.
+   ,,iiiii:,.   .,:iiiii,,
+ .;i;,::..,;iiiii;,..::,;i;.
+.;iii:  .:iiiiiiiii;.  :iii;
+:iii:    .:i:,,,:i:.    :iii:
+;iii.       :iii:       .iii;
+;ii;        ;iii;        ;ii;
+;iii,       ,;i;,       ,iii;
+,iii;.                 .;iii,
+ :iiii,               ,iiii:
+  :iiiii:.         .:iiiii:
+   ,;iiiiiii;:::;iiiiiii;,
+     .:iiiiiiiiiiiiiii:.
+LOGO
+
+# Pad the logo column to match all information rows.
+while [ "$i" -lt "$INFO_ROWS" ]; do
+    printf "%-31s  " ""
+    print_info "$i"
+    i=$((i + 1))
+done
+
+printf '\n'
+
