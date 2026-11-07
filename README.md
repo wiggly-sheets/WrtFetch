@@ -1,4 +1,5 @@
 # WrtFetch
+<img width="677" height="537" alt="SCR-20261106-traw" src="https://github.com/user-attachments/assets/b9c6a721-3bfe-4618-b8a1-61b7647de09f" />
 
 A lightweight, Fastfetch-inspired system information script for **OpenWrt routers**.
 
