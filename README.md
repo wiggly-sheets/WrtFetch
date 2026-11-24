@@ -14,7 +14,7 @@ WrtFetch is a standalone shell script. No package installation is required.
 **Download directly on your router:**
 
 ```sh
-wget -O /usr/bin/wrtfetch https://raw.githubusercontent.com/USERNAME/WrtFetch/main/wrtfetch
+wget -O /usr/bin/wrtfetch https://raw.githubusercontent.com/wiggly-sheets/WrtFetch/main/wrtfetch
 chmod +x /usr/bin/wrtfetch
 wrtfetch
 ```
