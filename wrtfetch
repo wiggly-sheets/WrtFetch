@@ -72,8 +72,6 @@ SOC=$(tr '\0' '\n' < /proc/device-tree/compatible 2>/dev/null |
 
 [ -n "$SOC" ] || SOC="Unknown"
 
-[ -n "$SOC" ] || SOC="Unknown"
-
 # Detect CPU core architecture
 CPU_CORE=$(tr '\0' '\n' < /proc/device-tree/cpus/cpu@0/compatible 2>/dev/null |
     awk -F, '$2 ~ /^cortex-/ {
@@ -87,8 +85,6 @@ CPU_CORE=$(tr '\0' '\n' < /proc/device-tree/cpus/cpu@0/compatible 2>/dev/null |
 CPU_CORES=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)
 
 [ "$CPU_CORES" -gt 0 ] 2>/dev/null || CPU_CORES="Unknown"
-
-# Build CPU description
 
 # Format SoC vendor and model
 SOC=$(printf '%s\n' "$SOC" | awk '
@@ -127,11 +123,6 @@ MEM_BAR=$(awk -v p="$MEM_PERCENT" 'BEGIN {
 # ==================================================
 # STORAGE
 # ==================================================
-NFO=$(tr '\0' ' ' < /proc/$$/cmdline 2>/dev/null | awk '{print $1}')
-SHELL_INFO=${SHELL_INFO##*/}
-SHELL_INFO=${SHELL_INFO#-}
-
-[ -n "$SHELL_INFO" ] || SHELL_INFO="Unknown"
 DISK=$(df -h / | awk 'NR==2 {
     print $3 " / " $2 " (" $5 ")"
 }')

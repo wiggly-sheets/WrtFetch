@@ -80,6 +80,55 @@ Save and reconnect over SSH. The default OpenWrt banner will no longer appear.
 
 To restore it, simply remove the `#`.
 
+## Persistence Across Firmware Updates
+
+The install commands above put the script in `/usr/bin`. That works, but `sysupgrade` does not keep the whole filesystem. It saves only a whitelist: `/lib/upgrade/keep.d/*` plus your `/etc/sysupgrade.conf`. `/usr/bin` is not on that list, so the script is lost on the next upgrade.
+
+This section is optional. Use it if you want WrtFetch to survive `sysupgrade`.
+
+**1. Store the script under `/etc`**
+
+```sh
+wget -O /etc/wrtfetch https://raw.githubusercontent.com/wiggly-sheets/WrtFetch/main/wrtfetch
+chmod +x /etc/wrtfetch
+```
+
+**2. Whitelist the script and the shell hooks**
+
+Append to `/etc/sysupgrade.conf`:
+
+```
+/etc/wrtfetch
+/root/.profile
+/etc/profile
+```
+
+Only list the files you actually edited. If you skipped the `.profile` and banner setup, list only `/etc/wrtfetch`.
+
+**3. Recreate the `wrtfetch` command after each upgrade**
+
+`/etc/uci-defaults/` survives `sysupgrade` and runs once on first boot. Use it to restore the symlink:
+
+```sh
+cat > /etc/uci-defaults/99-wrtfetch <<'EOF'
+#!/bin/sh
+ln -sf /etc/wrtfetch /usr/bin/wrtfetch
+exit 0
+EOF
+chmod +x /etc/uci-defaults/99-wrtfetch
+/etc/uci-defaults/99-wrtfetch
+```
+
+**4. Verify**
+
+```sh
+sysupgrade -l
+```
+
+`sysupgrade -l` prints the files that will be included in the backup. `/etc/wrtfetch` should appear in the list.
+
+Keep "Keep configuration files" checked during the upgrade. Flashing with `sysupgrade -n` wipes the overlay and everything above.
+
 ## Compatibility
 
 - Designed for OpenWrt and BusyBox `ash`.
